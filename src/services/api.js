@@ -15,6 +15,66 @@ const headers = (isJson = true) => {
   return h;
 };
 
+// Helper: translate English backend error to Vietnamese
+const translateError = (message) => {
+  if (!message) return 'Đã xảy ra lỗi hệ thống. Vui lòng thử lại sau.';
+  const cleanErr = message.trim();
+  if (cleanErr.includes('Invalid credentials') || cleanErr.includes('Sai email hoặc mật khẩu')) {
+    return 'Email hoặc mật khẩu không chính xác.';
+  }
+  if (cleanErr.includes('Email already exists') || cleanErr.includes('Email đã được sử dụng')) {
+    return 'Địa chỉ email này đã được sử dụng.';
+  }
+  if (cleanErr.includes('Invalid or expired OTP code')) {
+    return 'Mã OTP không chính xác hoặc đã hết hạn.';
+  }
+  if (cleanErr.includes('Invalid refresh token') || cleanErr.includes('Refresh token expired')) {
+    return 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.';
+  }
+  if (cleanErr.includes('Invalid request')) {
+    return 'Yêu cầu không hợp lệ.';
+  }
+  if (cleanErr.includes('User not found') || cleanErr.includes('Teacher not found')) {
+    return 'Không tìm thấy người dùng.';
+  }
+  if (cleanErr.includes('Invalid current password')) {
+    return 'Mật khẩu hiện tại không chính xác.';
+  }
+  if (cleanErr.includes('Sign not found')) {
+    return 'Không tìm thấy ký hiệu.';
+  }
+  if (cleanErr.includes('Session not found')) {
+    return 'Không tìm thấy phiên luyện tập.';
+  }
+  if (cleanErr.includes('Session already ended')) {
+    return 'Phiên luyện tập đã kết thúc.';
+  }
+  if (cleanErr.includes('Validation failed')) {
+    return 'Dữ liệu đầu vào không hợp lệ.';
+  }
+  if (cleanErr.includes('Trung tâm không tồn tại')) {
+    return 'Trung tâm không tồn tại.';
+  }
+  if (cleanErr.includes('Failed to fetch') || cleanErr.includes('NetworkError') || cleanErr.includes('network error')) {
+    return 'Không thể kết nối đến máy chủ. Vui lòng kiểm tra lại kết nối mạng hoặc đảm bảo máy chủ đã khởi động.';
+  }
+  return cleanErr;
+};
+
+// Intercept global fetch to catch and translate network connection errors centrally
+const originalFetch = window.fetch;
+window.fetch = async function (...args) {
+  try {
+    return await originalFetch.apply(this, args);
+  } catch (err) {
+    const msg = err.message || '';
+    if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Failed to connect')) {
+      throw new Error('Không thể kết nối đến máy chủ. Vui lòng kiểm tra lại kết nối mạng hoặc đảm bảo máy chủ đã khởi động.');
+    }
+    throw err;
+  }
+};
+
 // Helper: handle response
 const handleResponse = async (res) => {
   if (res.status === 401) {
@@ -28,25 +88,36 @@ const handleResponse = async (res) => {
     // Try to parse error message from response body
     try {
       const body = await res.json();
-      throw new Error(body.message || 'Unauthorized');
+      throw new Error(translateError(body.message || 'Unauthorized'));
     } catch (e) {
       if (e.message && e.message !== 'Unauthorized') throw e;
-      throw new Error('Sai email hoặc mật khẩu.');
+      throw new Error('Email hoặc mật khẩu không chính xác.');
     }
   }
   if (!res.ok) {
     const resClone = res.clone();
     try {
       const body = await res.json();
-      throw new Error(body.message || `HTTP ${res.status}`);
+      throw new Error(translateError(body.message || `HTTP ${res.status}`));
     } catch (e) {
       if (e.message && !e.message.startsWith('Unexpected')) throw e;
       const text = await resClone.text();
-      throw new Error(text || `HTTP ${res.status}`);
+      throw new Error(translateError(text || `HTTP ${res.status}`));
     }
   }
   const text = await res.text();
-  return text ? JSON.parse(text) : null;
+  if (!text) return null;
+  const parsed = JSON.parse(text);
+
+  // Unwrap ApiResponse envelopes (success, data, message, errors)
+  if (parsed && typeof parsed === 'object' && 'success' in parsed) {
+    if (parsed.success) {
+      return parsed.data !== undefined ? parsed.data : parsed;
+    } else {
+      throw new Error(translateError(parsed.message || 'API Error'));
+    }
+  }
+  return parsed;
 };
 
 // ============================
